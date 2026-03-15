@@ -1,0 +1,78 @@
+{
+    "name": "supplychain-network",
+    "version": "1.0.0",
+    "client": {
+        "organization": "Producer",
+        "connection": {
+            "timeout": {
+                "peer": {
+                    "endorser": "300"
+                }
+            }
+        }
+    },
+    "organizations": {
+        "Producer": {
+            "mspid": "ProducerMSP",
+            "peers": [
+                "peer0.producer.supplychain.com"
+            ]
+        },
+        "Logistics": {
+            "mspid": "LogisticsMSP",
+            "peers": [
+                "peer0.logistics.supplychain.com"
+            ]
+        },
+        "Retailer": {
+            "mspid": "RetailerMSP",
+            "peers": [
+                "peer0.retailer.supplychain.com"
+            ]
+        }
+    },
+    "peers": {
+        "peer0.producer.supplychain.com": {
+            "url": "grpcs://localhost:7051",
+            "tlsCACerts": {
+                "pem": "PRODUCER_TLS_CA"
+            },
+            "grpcOptions": {
+                "ssl-target-name-override": "peer0.producer.supplychain.com",
+                "hostnameOverride": "peer0.producer.supplychain.com"
+            }
+        },
+        "peer0.logistics.supplychain.com": {
+            "url": "grpcs://localhost:8051",
+            "tlsCACerts": {
+                "pem": "LOGISTICS_TLS_CA"
+            },
+            "grpcOptions": {
+                "ssl-target-name-override": "peer0.logistics.supplychain.com",
+                "hostnameOverride": "peer0.logistics.supplychain.com"
+            }
+        },
+        "peer0.retailer.supplychain.com": {
+            "url": "grpcs://localhost:9051",
+            "tlsCACerts": {
+                "pem": "RETAILER_TLS_CA"
+            },
+            "grpcOptions": {
+                "ssl-target-name-override": "peer0.retailer.supplychain.com",
+                "hostnameOverride": "peer0.retailer.supplychain.com"
+            }
+        }
+    },
+    "orderers": {
+        "orderer1.supplychain.com": {
+            "url": "grpcs://localhost:7050",
+            "tlsCACerts": {
+                "pem": "ORDERER_TLS_CA"
+            },
+            "grpcOptions": {
+                "ssl-target-name-override": "orderer1.supplychain.com",
+                "hostnameOverride": "orderer1.supplychain.com"
+            }
+        }
+    }
+}

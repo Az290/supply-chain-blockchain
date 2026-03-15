@@ -1,0 +1,32 @@
+# Node
+node_modules/
+package-lock.json
+
+# Wallet
+wallet/
+
+# Fabric crypto (tao lai bang cryptogen)
+network/organizations/ordererOrganizations/
+network/organizations/peerOrganizations/
+network/channel-artifacts/
+
+# Chaincode vendor (tao lai bang go mod vendor)
+chaincode/chaincode-go/vendor/
+
+# Chaincode package
+*.tar.gz
+
+# Upload files
+uploads/
+
+# Environment
+.env
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp

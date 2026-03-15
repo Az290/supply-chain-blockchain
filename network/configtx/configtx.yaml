@@ -1,0 +1,181 @@
+Organizations:
+  - &OrdererOrg
+    Name: OrdererOrg
+    ID: OrdererMSP
+    MSPDir: ../organizations/ordererOrganizations/supplychain.com/msp
+    Policies:
+      Readers:
+        Type: Signature
+        Rule: "OR('OrdererMSP.member')"
+      Writers:
+        Type: Signature
+        Rule: "OR('OrdererMSP.member')"
+      Admins:
+        Type: Signature
+        Rule: "OR('OrdererMSP.admin')"
+    OrdererEndpoints:
+      - orderer1.supplychain.com:7050
+      - orderer2.supplychain.com:8050
+      - orderer3.supplychain.com:9050
+
+  - &ProducerOrg
+    Name: ProducerMSP
+    ID: ProducerMSP
+    MSPDir: ../organizations/peerOrganizations/producer.supplychain.com/msp
+    Policies:
+      Readers:
+        Type: Signature
+        Rule: "OR('ProducerMSP.admin', 'ProducerMSP.peer', 'ProducerMSP.client')"
+      Writers:
+        Type: Signature
+        Rule: "OR('ProducerMSP.admin', 'ProducerMSP.client')"
+      Admins:
+        Type: Signature
+        Rule: "OR('ProducerMSP.admin')"
+      Endorsement:
+        Type: Signature
+        Rule: "OR('ProducerMSP.peer')"
+    AnchorPeers:
+      - Host: peer0.producer.supplychain.com
+        Port: 7051
+
+  - &LogisticsOrg
+    Name: LogisticsMSP
+    ID: LogisticsMSP
+    MSPDir: ../organizations/peerOrganizations/logistics.supplychain.com/msp
+    Policies:
+      Readers:
+        Type: Signature
+        Rule: "OR('LogisticsMSP.admin', 'LogisticsMSP.peer', 'LogisticsMSP.client')"
+      Writers:
+        Type: Signature
+        Rule: "OR('LogisticsMSP.admin', 'LogisticsMSP.client')"
+      Admins:
+        Type: Signature
+        Rule: "OR('LogisticsMSP.admin')"
+      Endorsement:
+        Type: Signature
+        Rule: "OR('LogisticsMSP.peer')"
+    AnchorPeers:
+      - Host: peer0.logistics.supplychain.com
+        Port: 8051
+
+  - &RetailerOrg
+    Name: RetailerMSP
+    ID: RetailerMSP
+    MSPDir: ../organizations/peerOrganizations/retailer.supplychain.com/msp
+    Policies:
+      Readers:
+        Type: Signature
+        Rule: "OR('RetailerMSP.admin', 'RetailerMSP.peer', 'RetailerMSP.client')"
+      Writers:
+        Type: Signature
+        Rule: "OR('RetailerMSP.admin', 'RetailerMSP.client')"
+      Admins:
+        Type: Signature
+        Rule: "OR('RetailerMSP.admin')"
+      Endorsement:
+        Type: Signature
+        Rule: "OR('RetailerMSP.peer')"
+    AnchorPeers:
+      - Host: peer0.retailer.supplychain.com
+        Port: 9051
+
+Capabilities:
+  Channel: &ChannelCapabilities
+    V2_0: true
+  Orderer: &OrdererCapabilities
+    V2_0: true
+  Application: &ApplicationCapabilities
+    V2_0: true
+
+Application: &ApplicationDefaults
+  Organizations:
+  Policies:
+    Readers:
+      Type: ImplicitMeta
+      Rule: "ANY Readers"
+    Writers:
+      Type: ImplicitMeta
+      Rule: "ANY Writers"
+    Admins:
+      Type: ImplicitMeta
+      Rule: "MAJORITY Admins"
+    LifecycleEndorsement:
+      Type: ImplicitMeta
+      Rule: "MAJORITY Endorsement"
+    Endorsement:
+      Type: ImplicitMeta
+      Rule: "MAJORITY Endorsement"
+  Capabilities:
+    <<: *ApplicationCapabilities
+
+Orderer: &OrdererDefaults
+  OrdererType: etcdraft
+  Addresses:
+    - orderer1.supplychain.com:7050
+    - orderer2.supplychain.com:8050
+    - orderer3.supplychain.com:9050
+  EtcdRaft:
+    Consenters:
+      - Host: orderer1.supplychain.com
+        Port: 7050
+        ClientTLSCert: ../organizations/ordererOrganizations/supplychain.com/orderers/orderer1.supplychain.com/tls/server.crt
+        ServerTLSCert: ../organizations/ordererOrganizations/supplychain.com/orderers/orderer1.supplychain.com/tls/server.crt
+      - Host: orderer2.supplychain.com
+        Port: 8050
+        ClientTLSCert: ../organizations/ordererOrganizations/supplychain.com/orderers/orderer2.supplychain.com/tls/server.crt
+        ServerTLSCert: ../organizations/ordererOrganizations/supplychain.com/orderers/orderer2.supplychain.com/tls/server.crt
+      - Host: orderer3.supplychain.com
+        Port: 9050
+        ClientTLSCert: ../organizations/ordererOrganizations/supplychain.com/orderers/orderer3.supplychain.com/tls/server.crt
+        ServerTLSCert: ../organizations/ordererOrganizations/supplychain.com/orderers/orderer3.supplychain.com/tls/server.crt
+  BatchTimeout: 2s
+  BatchSize:
+    MaxMessageCount: 10
+    AbsoluteMaxBytes: 99 MB
+    PreferredMaxBytes: 512 KB
+  Organizations:
+  Policies:
+    Readers:
+      Type: ImplicitMeta
+      Rule: "ANY Readers"
+    Writers:
+      Type: ImplicitMeta
+      Rule: "ANY Writers"
+    Admins:
+      Type: ImplicitMeta
+      Rule: "MAJORITY Admins"
+    BlockValidation:
+      Type: ImplicitMeta
+      Rule: "ANY Writers"
+  Capabilities:
+    <<: *OrdererCapabilities
+
+Channel: &ChannelDefaults
+  Policies:
+    Readers:
+      Type: ImplicitMeta
+      Rule: "ANY Readers"
+    Writers:
+      Type: ImplicitMeta
+      Rule: "ANY Writers"
+    Admins:
+      Type: ImplicitMeta
+      Rule: "MAJORITY Admins"
+  Capabilities:
+    <<: *ChannelCapabilities
+
+Profiles:
+  SupplyChainChannel:
+    <<: *ChannelDefaults
+    Orderer:
+      <<: *OrdererDefaults
+      Organizations:
+        - *OrdererOrg
+    Application:
+      <<: *ApplicationDefaults
+      Organizations:
+        - *ProducerOrg
+        - *LogisticsOrg
+        - *RetailerOrg

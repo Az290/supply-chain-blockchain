@@ -1,0 +1,11 @@
+PeerOrgs:
+  - Name: Logistics
+    Domain: logistics.supplychain.com
+    EnableNodeOUs: true
+    Template:
+      Count: 1
+      SANS:
+        - localhost
+        - 127.0.0.1
+    Users:
+      Count: 2
