@@ -5,6 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const { connectGateway } = require('../config/fabric');
+const db = require('../config/database');
 
 // Cau hinh luu file upload
 const uploadDir = path.join(__dirname, '..', '..', 'uploads');
@@ -24,7 +25,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({
     storage: storage,
-    limits: { fileSize: 10 * 1024 * 1024 }, // 10MB max
+    limits: { fileSize: 10 * 1024 * 1024 },
     fileFilter: function (req, file, cb) {
         const allowedTypes = /jpeg|jpg|png|gif|pdf|doc|docx/;
         const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
@@ -51,13 +52,26 @@ router.post('/upload/image/:productId', upload.single('file'), async (req, res) 
             return res.status(400).json({ success: false, message: 'No file uploaded' });
         }
 
-        // Tao hash tu file
         const fileHash = generateFileHash(req.file.path);
 
-        // Luu hash len blockchain
         const { gateway, contract } = await connectGateway('admin');
         await contract.submitTransaction('UpdateImageHash', req.params.productId, fileHash);
         gateway.disconnect();
+
+        try {
+            await db.saveFileRecord({
+                productId: req.params.productId,
+                fileType: 'IMAGE',
+                originalName: req.file.originalname,
+                storedName: req.file.filename,
+                fileHash: fileHash,
+                fileSize: req.file.size,
+                mimeType: req.file.mimetype,
+                uploadedBy: req.user ? req.user.id : 'anonymous'
+            });
+        } catch (dbError) {
+            console.error('Failed to save file metadata:', dbError.message);
+        }
 
         res.json({
             success: true,
@@ -86,6 +100,21 @@ router.post('/upload/certificate/:productId', upload.single('file'), async (req,
         const { gateway, contract } = await connectGateway('admin');
         await contract.submitTransaction('UpdateCertificateHash', req.params.productId, fileHash);
         gateway.disconnect();
+
+        try {
+            await db.saveFileRecord({
+                productId: req.params.productId,
+                fileType: 'CERTIFICATE',
+                originalName: req.file.originalname,
+                storedName: req.file.filename,
+                fileHash: fileHash,
+                fileSize: req.file.size,
+                mimeType: req.file.mimetype,
+                uploadedBy: req.user ? req.user.id : 'anonymous'
+            });
+        } catch (dbError) {
+            console.error('Failed to save file metadata:', dbError.message);
+        }
 
         res.json({
             success: true,
@@ -128,6 +157,73 @@ router.get('/files', (req, res) => {
             };
         });
         res.json({ success: true, data: files });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+// GET - Lay hinh anh san pham theo productId
+router.get('/product/:productId/image', async (req, res) => {
+    try {
+        const files = await db.getFilesByProduct(req.params.productId);
+        const imageFile = files.find(f => f.file_type === 'IMAGE');
+        
+        if (!imageFile) {
+            return res.status(404).json({ success: false, message: 'No image found for this product' });
+        }
+
+        const filePath = path.join(uploadDir, imageFile.stored_name);
+        
+        if (!fs.existsSync(filePath)) {
+            return res.status(404).json({ success: false, message: 'Image file not found on disk' });
+        }
+
+        res.sendFile(filePath);
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+// GET - Lay chung nhan san pham theo productId
+router.get('/product/:productId/certificate', async (req, res) => {
+    try {
+        const files = await db.getFilesByProduct(req.params.productId);
+        const certFile = files.find(f => f.file_type === 'CERTIFICATE');
+        
+        if (!certFile) {
+            return res.status(404).json({ success: false, message: 'No certificate found for this product' });
+        }
+
+        const filePath = path.join(uploadDir, certFile.stored_name);
+        
+        if (!fs.existsSync(filePath)) {
+            return res.status(404).json({ success: false, message: 'Certificate file not found on disk' });
+        }
+
+        res.sendFile(filePath);
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+// GET - Lay metadata cac file cua san pham
+router.get('/product/:productId/files', async (req, res) => {
+    try {
+        const files = await db.getFilesByProduct(req.params.productId);
+        
+        const filesWithUrls = files.map(f => ({
+            id: f.id,
+            type: f.file_type,
+            originalName: f.original_name,
+            fileHash: f.file_hash,
+            fileSize: f.file_size,
+            mimeType: f.mime_type,
+            uploadedBy: f.uploaded_by,
+            uploadedAt: f.created_at,
+            url: '/api/ipfs/file/' + f.stored_name
+        }));
+
+        res.json({ success: true, data: filesWithUrls });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }

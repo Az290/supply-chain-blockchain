@@ -1,8 +1,51 @@
 const express = require('express');
 const router = express.Router();
+const path = require('path');
+const fs = require('fs');
+const crypto = require('crypto');
+const multer = require('multer');
 const { connectGateway } = require('../config/fabric');
 const { authenticateToken, authorizeRoles } = require('../middleware/auth');
 const QRCode = require('qrcode');
+const db = require('../config/database');
+
+// Cau hinh multer cho upload file
+const uploadDir = path.join(__dirname, '..', '..', 'uploads');
+if (!fs.existsSync(uploadDir)) {
+    fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+const storage = multer.diskStorage({
+    destination: function (req, file, cb) {
+        cb(null, uploadDir);
+    },
+    filename: function (req, file, cb) {
+        const uniqueName = Date.now() + '-' + Math.round(Math.random() * 1E9);
+        cb(null, uniqueName + path.extname(file.originalname));
+    }
+});
+
+const upload = multer({
+    storage: storage,
+    limits: { fileSize: 10 * 1024 * 1024 },
+    fileFilter: function (req, file, cb) {
+        const allowedTypes = /jpeg|jpg|png|gif|pdf|doc|docx/;
+        const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+        const mimetype = allowedTypes.test(file.mimetype);
+        if (mimetype && extname) {
+            return cb(null, true);
+        }
+        cb(new Error('Only images and documents are allowed'));
+    }
+});
+
+// Tao hash tu file
+function generateFileHash(filePath) {
+    const fileBuffer = fs.readFileSync(filePath);
+    const hashSum = crypto.createHash('sha256');
+    hashSum.update(fileBuffer);
+    return 'Qm' + hashSum.digest('hex').substring(0, 44);
+}
 
 // ===== PUBLIC APIs (khong can dang nhap) =====
 
@@ -20,12 +63,10 @@ router.post('/init', async (req, res) => {
 
 // GET - Trang web truy xuat nguon goc (PUBLIC - khach hang quet QR)
 router.get('/trace/:id', async (req, res) => {
-    // Neu request tu browser (Accept: text/html) -> tra ve trang web
     if (req.headers.accept && req.headers.accept.includes('text/html')) {
         var htmlPath = require('path').join(__dirname, '..', 'views', 'trace.html');
         return res.sendFile(htmlPath);
     }
-    // Neu request tu API (app) -> tra ve JSON
     try {
         var conn = await connectGateway('admin');
         var productResult = await conn.contract.evaluateTransaction('ReadProduct', req.params.id);
@@ -130,8 +171,8 @@ router.get('/:id', authenticateToken, async (req, res) => {
     }
 });
 
-// POST - Tao san pham moi (chi PRODUCER, ADMIN)
-router.post('/', authenticateToken, authorizeRoles('PRODUCER', 'ADMIN'), async (req, res) => {
+// POST - Tao san pham moi (chi PRODUCER, ADMIN) - Ho tro upload anh
+router.post('/', authenticateToken, authorizeRoles('PRODUCER', 'ADMIN'), upload.single('image'), async (req, res) => {
     try {
         var { id, name, productType, origin, batchNumber, quantity, unit, price, description } = req.body;
 
@@ -139,7 +180,6 @@ router.post('/', authenticateToken, authorizeRoles('PRODUCER', 'ADMIN'), async (
             return res.status(400).json({ success: false, message: 'Missing required fields' });
         }
 
-        // Dung user.id tu JWT lam owner
         var owner = req.user.id;
 
         var conn = await connectGateway('admin');
@@ -149,15 +189,116 @@ router.post('/', authenticateToken, authorizeRoles('PRODUCER', 'ADMIN'), async (
             batchNumber, quantity.toString(), unit,
             (price || 0).toString(), description || ''
         );
+
+        // Neu co upload anh
+        if (req.file) {
+            var fileHash = generateFileHash(req.file.path);
+            await conn.contract.submitTransaction('UpdateImageHash', id, fileHash);
+            
+            try {
+                await db.saveFileRecord({
+                    productId: id,
+                    fileType: 'IMAGE',
+                    originalName: req.file.originalname,
+                    storedName: req.file.filename,
+                    fileHash: fileHash,
+                    fileSize: req.file.size,
+                    mimeType: req.file.mimetype,
+                    uploadedBy: req.user.id
+                });
+            } catch (dbError) {
+                console.error('Failed to save file metadata:', dbError.message);
+            }
+        }
+
         conn.gateway.disconnect();
-        res.json({ success: true, message: 'Product ' + id + ' created successfully' });
+        
+        res.json({ 
+            success: true, 
+            message: 'Product ' + id + ' created successfully',
+            data: {
+                productId: id,
+                hasImage: !!req.file,
+                imageFileName: req.file ? req.file.filename : null
+            }
+        });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
 });
 
-// PUT - Cap nhat trang thai (role phu hop moi duoc)
-router.put('/:id/status', authenticateToken, async (req, res) => {
+// PUT - Cap nhat san pham (thong tin co ban va anh)
+router.put('/:id', authenticateToken, upload.single('image'), async (req, res) => {
+    try {
+        var { price, description } = req.body;
+        var productId = req.params.id;
+        var updated = [];
+
+        var conn = await connectGateway('admin');
+
+        // Kiem tra san pham ton tai
+        var result = await conn.contract.evaluateTransaction('ReadProduct', productId);
+        var product = JSON.parse(result.toString());
+
+        // Kiem tra quyen (owner hoac ADMIN)
+        if (product.currentOwner !== req.user.id && req.user.role !== 'ADMIN') {
+            conn.gateway.disconnect();
+            return res.status(403).json({
+                success: false,
+                message: 'Only current owner or ADMIN can update this product'
+            });
+        }
+
+        // Cap nhat gia neu co
+        if (price !== undefined && price !== null) {
+            await conn.contract.submitTransaction('UpdateProductPrice', productId, price.toString());
+            updated.push('price');
+        }
+
+        // Cap nhat anh neu co
+        if (req.file) {
+            var fileHash = generateFileHash(req.file.path);
+            await conn.contract.submitTransaction('UpdateImageHash', productId, fileHash);
+            
+            try {
+                await db.saveFileRecord({
+                    productId: productId,
+                    fileType: 'IMAGE',
+                    originalName: req.file.originalname,
+                    storedName: req.file.filename,
+                    fileHash: fileHash,
+                    fileSize: req.file.size,
+                    mimeType: req.file.mimetype,
+                    uploadedBy: req.user.id
+                });
+            } catch (dbError) {
+                console.error('Failed to save file metadata:', dbError.message);
+            }
+            updated.push('image');
+        }
+
+        conn.gateway.disconnect();
+
+        if (updated.length === 0) {
+            return res.status(400).json({ success: false, message: 'No fields to update' });
+        }
+
+        res.json({ 
+            success: true, 
+            message: 'Product updated: ' + updated.join(', '),
+            data: {
+                productId: productId,
+                updatedFields: updated,
+                imageFileName: req.file ? req.file.filename : null
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+// PUT - Cap nhat trang thai (role phu hop moi duoc) - Ho tro dinh kem anh
+router.put('/:id/status', authenticateToken, upload.single('image'), async (req, res) => {
     try {
         var { status, location, description, temperature, humidity } = req.body;
 
@@ -165,7 +306,6 @@ router.put('/:id/status', authenticateToken, async (req, res) => {
             return res.status(400).json({ success: false, message: 'Missing required fields: status, location, description' });
         }
 
-        // Dung user.id tu JWT lam updatedBy (khong cho client tu truyen)
         var updatedBy = req.user.id;
 
         var conn = await connectGateway('admin');
@@ -174,8 +314,36 @@ router.put('/:id/status', authenticateToken, async (req, res) => {
             req.params.id, status, location, updatedBy,
             description, temperature || '', humidity || ''
         );
+
+        // Neu co dinh kem anh khi cap nhat trang thai
+        if (req.file) {
+            var fileHash = generateFileHash(req.file.path);
+            await conn.contract.submitTransaction('UpdateImageHash', req.params.id, fileHash);
+            
+            try {
+                await db.saveFileRecord({
+                    productId: req.params.id,
+                    fileType: 'IMAGE',
+                    originalName: req.file.originalname,
+                    storedName: req.file.filename,
+                    fileHash: fileHash,
+                    fileSize: req.file.size,
+                    mimeType: req.file.mimetype,
+                    uploadedBy: req.user.id
+                });
+            } catch (dbError) {
+                console.error('Failed to save file metadata:', dbError.message);
+            }
+        }
+
         conn.gateway.disconnect();
-        res.json({ success: true, message: 'Status updated to ' + status + ' by ' + updatedBy });
+        res.json({ 
+            success: true, 
+            message: 'Status updated to ' + status + ' by ' + updatedBy,
+            data: {
+                hasImage: !!req.file
+            }
+        });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
@@ -190,7 +358,6 @@ router.put('/:id/transfer', authenticateToken, async (req, res) => {
             return res.status(400).json({ success: false, message: 'Missing newOwner field' });
         }
 
-        // Kiem tra nguoi goi co phai owner hien tai khong
         var conn = await connectGateway('admin');
         var result = await conn.contract.evaluateTransaction('ReadProduct', req.params.id);
         var product = JSON.parse(result.toString());
