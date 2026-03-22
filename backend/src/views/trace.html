@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Truy xuất nguồn gốc sản phẩm</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Arial, sans-serif; background: #f5f5f5; color: #333; }
+        .header { background: linear-gradient(135deg, #1565C0, #0D47A1); color: white; padding: 20px; text-align: center; }
+        .header h1 { font-size: 20px; margin-bottom: 4px; }
+        .header p { font-size: 13px; opacity: 0.9; }
+        .container { max-width: 600px; margin: 0 auto; padding: 16px; }
+        .auth-badge { margin: 16px 0; padding: 16px; border-radius: 12px; display: flex; align-items: center; gap: 12px; }
+        .auth-badge.valid { background: #C8E6C9; color: #2E7D32; }
+        .auth-badge.invalid { background: #FFCDD2; color: #D32F2F; }
+        .auth-badge .icon { font-size: 32px; }
+        .auth-badge .text h3 { font-size: 16px; }
+        .auth-badge .text p { font-size: 12px; }
+        .card { background: white; border-radius: 12px; padding: 16px; margin-bottom: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+        .card h3 { color: #1565C0; font-size: 15px; margin-bottom: 12px; border-bottom: 2px solid #E3F2FD; padding-bottom: 8px; }
+        .product-name { font-size: 20px; font-weight: bold; margin-bottom: 8px; }
+        .status-badge { display: inline-block; padding: 4px 12px; border-radius: 16px; font-size: 12px; font-weight: bold; }
+        .info-row { display: flex; padding: 6px 0; border-bottom: 1px solid #f0f0f0; }
+        .info-row:last-child { border-bottom: none; }
+        .info-label { color: #666; width: 140px; font-size: 14px; }
+        .info-value { font-weight: 500; font-size: 14px; flex: 1; }
+        .timeline-item { padding: 12px; border-radius: 8px; margin-bottom: 8px; }
+        .timeline-item .time { font-size: 12px; color: #666; }
+        .timeline-item .detail { font-size: 13px; margin-top: 4px; }
+        .transfer-item { background: #E3F2FD; padding: 10px; border-radius: 8px; margin-bottom: 6px; }
+        .transfer-item .arrow { color: #1565C0; font-weight: bold; }
+        .stats-row { display: flex; gap: 8px; margin-bottom: 12px; }
+        .stat-card { flex: 1; background: white; border-radius: 8px; padding: 12px; text-align: center; box-shadow: 0 1px 4px rgba(0,0,0,0.06); }
+        .stat-card .value { font-size: 18px; font-weight: bold; }
+        .stat-card .label { font-size: 11px; color: #666; }
+        .footer { text-align: center; padding: 20px; color: #999; font-size: 12px; }
+        .loading { text-align: center; padding: 40px; }
+        .error { text-align: center; padding: 40px; color: #D32F2F; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🔗 Supply Chain Blockchain</h1>
+        <p>Hệ thống truy xuất nguồn gốc nông sản</p>
+    </div>
+    <div class="container" id="content">
+        <div class="loading">
+            <p>⏳ Đang truy vấn dữ liệu từ Blockchain...</p>
+        </div>
+    </div>
+    <div class="footer">
+        <p>Dữ liệu được ghi nhận trên Hyperledger Fabric Blockchain</p>
+        <p>Không thể sửa đổi hoặc xóa bỏ</p>
+    </div>
+
+    <script>
+        var statusLabels = {
+            'CREATED': 'Khởi tạo', 'HARVESTED': 'Đã thu hoạch', 'PROCESSED': 'Đã chế biến',
+            'PACKAGED': 'Đã đóng gói', 'IN_TRANSIT': 'Đang vận chuyển', 'WAREHOUSED': 'Đã nhập kho',
+            'DISTRIBUTED': 'Đã phân phối', 'IN_STORE': 'Tại cửa hàng', 'SOLD': 'Đã bán'
+        };
+        var statusColors = {
+            'CREATED': '#BBDEFB', 'HARVESTED': '#C8E6C9', 'PROCESSED': '#FFE0B2',
+            'PACKAGED': '#B2EBF2', 'IN_TRANSIT': '#E1BEE7', 'WAREHOUSED': '#C5CAE9',
+            'DISTRIBUTED': '#F8BBD0', 'IN_STORE': '#FFF9C4', 'SOLD': '#FFCDD2'
+        };
+
+        var productId = window.location.pathname.split('/').pop();
+
+        fetch('/api/products/trace/' + productId)
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (!data.success) {
+                    document.getElementById('content').innerHTML = '<div class="error"><h2>❌ Không tìm thấy sản phẩm</h2><p>Mã: ' + productId + '</p></div>';
+                    return;
+                }
+                var v = data.data.verify;
+                var p = data.data.product;
+                var html = '';
+
+                // Badge xac thuc
+                html += '<div class="auth-badge ' + (v.isAuthentic ? 'valid' : 'invalid') + '">';
+                html += '<div class="icon">' + (v.isAuthentic ? '✅' : '❌') + '</div>';
+                html += '<div class="text"><h3>' + (v.isAuthentic ? 'Sản phẩm xác thực' : 'Không xác thực') + '</h3>';
+                html += '<p>Dữ liệu trên Blockchain - không thể giả mạo</p></div></div>';
+
+                // Thong tin san pham
+                html += '<div class="card"><h3>📦 Thông tin sản phẩm</h3>';
+                html += '<div class="product-name">' + v.productName + '</div>';
+                html += '<span class="status-badge" style="background:' + (statusColors[v.currentStatus] || '#eee') + '">' + (statusLabels[v.currentStatus] || v.currentStatus) + '</span>';
+                html += '<div style="margin-top:12px">';
+                html += infoRow('Mã sản phẩm', v.productId);
+                html += infoRow('Xuất xứ', v.origin);
+                html += infoRow('Lô hàng', v.batchNumber);
+                if (p) {
+                    html += infoRow('Loại', p.productType);
+                    html += infoRow('Số lượng', p.quantity + ' ' + p.unit);
+                    html += infoRow('Giá', p.price.toLocaleString() + ' VNĐ/' + p.unit);
+                    if (p.description) html += infoRow('Mô tả', p.description);
+                }
+                html += infoRow('Chủ sở hữu', v.currentOwner);
+                html += infoRow('Ngày tạo', formatTime(v.createdAt));
+                html += infoRow('Cập nhật cuối', formatTime(v.lastUpdated));
+                html += infoRow('Chứng nhận', v.hasCertificate ? 'Có ✓' : 'Chưa có');
+                html += '</div></div>';
+
+                // Thong ke
+                html += '<div class="stats-row">';
+                html += statCard(v.totalTransfers, 'Chuyển giao', '#1565C0');
+                html += statCard(v.totalUpdates, 'Cập nhật', '#2E7D32');
+                html += statCard(v.hasCertificate ? '✓' : '✗', 'Chứng nhận', v.hasCertificate ? '#2E7D32' : '#E65100');
+                html += '</div>';
+
+                // Hanh trinh
+                if (p && p.statusHistory && p.statusHistory.length > 0) {
+                    html += '<div class="card"><h3>📍 Hành trình sản phẩm (' + p.statusHistory.length + ' giai đoạn)</h3>';
+                    for (var i = p.statusHistory.length - 1; i >= 0; i--) {
+                        var s = p.statusHistory[i];
+                        html += '<div class="timeline-item" style="background:' + (statusColors[s.status] || '#f5f5f5') + '">';
+                        html += '<span class="status-badge" style="background:rgba(0,0,0,0.1)">' + (statusLabels[s.status] || s.status) + '</span>';
+                        html += '<span class="time"> ' + formatTime(s.timestamp) + '</span>';
+                        html += '<div class="detail">📍 ' + s.location + ' | 👤 ' + s.updatedBy + '</div>';
+                        html += '<div class="detail">' + s.description + '</div>';
+                        if (s.temperature) html += '<div class="detail">🌡 ' + s.temperature + '°C | 💧 ' + s.humidity + '%</div>';
+                        html += '</div>';
+                    }
+                    html += '</div>';
+                }
+
+                // Lich su chuyen giao
+                if (p && p.ownerHistory && p.ownerHistory.length > 0) {
+                    html += '<div class="card"><h3>🔄 Lịch sử chuyển giao (' + p.ownerHistory.length + ' lần)</h3>';
+                    for (var j = 0; j < p.ownerHistory.length; j++) {
+                        var o = p.ownerHistory[j];
+                        html += '<div class="transfer-item">';
+                        html += '<span class="arrow">' + o.from + ' → ' + o.to + '</span>';
+                        html += '<div class="time">⏰ ' + formatTime(o.timestamp) + '</div>';
+                        if (o.txId) html += '<div class="time">TX: ' + o.txId.substring(0, 24) + '...</div>';
+                        html += '</div>';
+                    }
+                    html += '</div>';
+                }
+
+                document.getElementById('content').innerHTML = html;
+            })
+            .catch(function(err) {
+                document.getElementById('content').innerHTML = '<div class="error"><h2>❌ Lỗi kết nối</h2><p>' + err.message + '</p></div>';
+            });
+
+        function infoRow(label, value) {
+            return '<div class="info-row"><span class="info-label">' + label + '</span><span class="info-value">' + value + '</span></div>';
+        }
+        function statCard(value, label, color) {
+            return '<div class="stat-card"><div class="value" style="color:' + color + '">' + value + '</div><div class="label">' + label + '</div></div>';
+        }
+        function formatTime(t) {
+            if (!t) return '';
+            return t.substring(0, 19).replace('T', ' ');
+        }
+    </script>
+</body>
+</html>

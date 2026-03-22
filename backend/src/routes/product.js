@@ -18,14 +18,22 @@ router.post('/init', async (req, res) => {
     }
 });
 
-// GET - Truy xuat nguon goc san pham (public cho nguoi tieu dung)
+// GET - Trang web truy xuat nguon goc (PUBLIC - khach hang quet QR)
 router.get('/trace/:id', async (req, res) => {
+    // Neu request tu browser (Accept: text/html) -> tra ve trang web
+    if (req.headers.accept && req.headers.accept.includes('text/html')) {
+        var htmlPath = require('path').join(__dirname, '..', 'views', 'trace.html');
+        return res.sendFile(htmlPath);
+    }
+    // Neu request tu API (app) -> tra ve JSON
     try {
         var conn = await connectGateway('admin');
-        var result = await conn.contract.evaluateTransaction('VerifyProduct', req.params.id);
+        var productResult = await conn.contract.evaluateTransaction('ReadProduct', req.params.id);
+        var product = JSON.parse(productResult.toString());
+        var verifyResult = await conn.contract.evaluateTransaction('VerifyProduct', req.params.id);
+        var verify = JSON.parse(verifyResult.toString());
         conn.gateway.disconnect();
-        var verification = JSON.parse(result.toString());
-        res.json({ success: true, data: verification });
+        res.json({ success: true, data: { verify: verify, product: product } });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
