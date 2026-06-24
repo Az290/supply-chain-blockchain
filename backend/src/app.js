@@ -13,6 +13,7 @@ var db = require('./config/database');
 
 var app = express();
 var PORT = process.env.PORT || 3001;
+var paymentRoutes = require('./routes/payment');
 
 app.use(cors());
 app.use(express.json());
@@ -24,12 +25,13 @@ app.use('/api/participants', participantRoutes);
 app.use('/api/ipfs', ipfsRoutes);
 app.use('/api/logs', logsRoutes);
 app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
+app.use('/api/payments', paymentRoutes);
+
 // Trang web truy xuat nguon goc (khach hang quet QR)
 app.get('/trace/:id', function(req, res) {
     var htmlPath = require('path').join(__dirname, 'views', 'trace.html');
     res.sendFile(htmlPath);
 });
-
 app.get('/api/health', function(req, res) {
     res.json({
         status: 'OK',

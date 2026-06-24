@@ -5,6 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const { connectGateway } = require('../config/fabric');
+const { authenticateToken, authorizeRoles } = require('../middleware/auth');
 const db = require('../config/database');
 
 // Cau hinh luu file upload
@@ -27,13 +28,24 @@ const upload = multer({
     storage: storage,
     limits: { fileSize: 10 * 1024 * 1024 },
     fileFilter: function (req, file, cb) {
-        const allowedTypes = /jpeg|jpg|png|gif|pdf|doc|docx/;
-        const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
-        const mimetype = allowedTypes.test(file.mimetype);
-        if (mimetype && extname) {
-            return cb(null, true);
-        }
-        cb(new Error('Only images and documents are allowed'));
+        const ALLOWED_FILES = {
+    '.jpg': ['image/jpeg'],
+    '.jpeg': ['image/jpeg'],
+    '.png': ['image/png'],
+    '.gif': ['image/gif'],
+    '.pdf': ['application/pdf'],
+    '.doc': ['application/msword'],
+    '.docx': ['application/vnd.openxmlformats-officedocument.wordprocessingml.document']
+};
+
+const ext = path.extname(file.originalname).toLowerCase();
+const allowedMimes = ALLOWED_FILES[ext];
+
+if (allowedMimes && allowedMimes.includes(file.mimetype)) {
+    return cb(null, true);
+}
+
+cb(new Error(`File type not allowed. Allowed: ${Object.keys(ALLOWED_FILES).join(', ')}`));
     }
 });
 
@@ -45,18 +57,50 @@ function generateFileHash(filePath) {
     return 'Qm' + hashSum.digest('hex').substring(0, 44);
 }
 
-// POST - Upload hinh anh san pham
-router.post('/upload/image/:productId', upload.single('file'), async (req, res) => {
+// Xoa file da upload neu fail (tranh rac dia)
+function cleanupUploadedFile(file) {
+    if (!file) return;
+    try { fs.unlinkSync(file.path); } catch (_) { /* ignore */ }
+}
+
+// POST - Upload hinh anh san pham (CAN DANG NHAP + chi owner hoac ADMIN)
+router.post('/upload/image/:productId', authenticateToken, upload.single('file'), async (req, res) => {
+    let gateway;
     try {
         if (!req.file) {
             return res.status(400).json({ success: false, message: 'No file uploaded' });
         }
 
+        const conn = await connectGateway('admin');
+        gateway = conn.gateway;
+        const contract = conn.contract;
+
+        // Kiem tra quyen so huu (ADMIN bo qua check)
+        if (req.user.role !== 'ADMIN') {
+            let product;
+            try {
+                const result = await contract.evaluateTransaction('ReadProduct', req.params.productId);
+                product = JSON.parse(result.toString());
+            } catch (readErr) {
+                gateway.disconnect();
+                cleanupUploadedFile(req.file);
+                return res.status(404).json({ success: false, message: 'Product not found' });
+            }
+            if (product.currentOwner !== req.user.id) {
+                gateway.disconnect();
+                cleanupUploadedFile(req.file);
+                return res.status(403).json({
+                    success: false,
+                    message: 'Only current owner (' + product.currentOwner + ') or ADMIN can upload image for this product'
+                });
+            }
+        }
+
         const fileHash = generateFileHash(req.file.path);
 
-        const { gateway, contract } = await connectGateway('admin');
         await contract.submitTransaction('UpdateImageHash', req.params.productId, fileHash);
         gateway.disconnect();
+        gateway = null;
 
         try {
             await db.saveFileRecord({
@@ -67,7 +111,7 @@ router.post('/upload/image/:productId', upload.single('file'), async (req, res) 
                 fileHash: fileHash,
                 fileSize: req.file.size,
                 mimeType: req.file.mimetype,
-                uploadedBy: req.user ? req.user.id : 'anonymous'
+                uploadedBy: req.user.id
             });
         } catch (dbError) {
             console.error('Failed to save file metadata:', dbError.message);
@@ -84,22 +128,50 @@ router.post('/upload/image/:productId', upload.single('file'), async (req, res) 
             }
         });
     } catch (error) {
+        if (gateway) { try { gateway.disconnect(); } catch (_) {} }
+        cleanupUploadedFile(req.file);
         res.status(500).json({ success: false, message: error.message });
     }
 });
 
-// POST - Upload chung nhan san pham
-router.post('/upload/certificate/:productId', upload.single('file'), async (req, res) => {
+// POST - Upload chung nhan san pham (CAN DANG NHAP + chi owner hoac ADMIN)
+router.post('/upload/certificate/:productId', authenticateToken, upload.single('file'), async (req, res) => {
+    let gateway;
     try {
         if (!req.file) {
             return res.status(400).json({ success: false, message: 'No file uploaded' });
         }
 
+        const conn = await connectGateway('admin');
+        gateway = conn.gateway;
+        const contract = conn.contract;
+
+        // Kiem tra quyen so huu (ADMIN bo qua check)
+        if (req.user.role !== 'ADMIN') {
+            let product;
+            try {
+                const result = await contract.evaluateTransaction('ReadProduct', req.params.productId);
+                product = JSON.parse(result.toString());
+            } catch (readErr) {
+                gateway.disconnect();
+                cleanupUploadedFile(req.file);
+                return res.status(404).json({ success: false, message: 'Product not found' });
+            }
+            if (product.currentOwner !== req.user.id) {
+                gateway.disconnect();
+                cleanupUploadedFile(req.file);
+                return res.status(403).json({
+                    success: false,
+                    message: 'Only current owner (' + product.currentOwner + ') or ADMIN can upload certificate for this product'
+                });
+            }
+        }
+
         const fileHash = generateFileHash(req.file.path);
 
-        const { gateway, contract } = await connectGateway('admin');
         await contract.submitTransaction('UpdateCertificateHash', req.params.productId, fileHash);
         gateway.disconnect();
+        gateway = null;
 
         try {
             await db.saveFileRecord({
@@ -110,7 +182,7 @@ router.post('/upload/certificate/:productId', upload.single('file'), async (req,
                 fileHash: fileHash,
                 fileSize: req.file.size,
                 mimeType: req.file.mimetype,
-                uploadedBy: req.user ? req.user.id : 'anonymous'
+                uploadedBy: req.user.id
             });
         } catch (dbError) {
             console.error('Failed to save file metadata:', dbError.message);
@@ -127,11 +199,13 @@ router.post('/upload/certificate/:productId', upload.single('file'), async (req,
             }
         });
     } catch (error) {
+        if (gateway) { try { gateway.disconnect(); } catch (_) {} }
+        cleanupUploadedFile(req.file);
         res.status(500).json({ success: false, message: error.message });
     }
 });
 
-// GET - Lay file theo ten
+// GET - Lay file theo ten (PUBLIC - trace.html dung de hien thi anh/chung nhan cho khach quet QR)
 router.get('/file/:filename', (req, res) => {
     const filePath = path.join(uploadDir, req.params.filename);
     if (!fs.existsSync(filePath)) {
@@ -140,8 +214,8 @@ router.get('/file/:filename', (req, res) => {
     res.sendFile(filePath);
 });
 
-// GET - Danh sach file da upload
-router.get('/files', (req, res) => {
+// GET - Danh sach toan bo file da upload (CHI ADMIN - thong tin nhay cam ve he thong)
+router.get('/files', authenticateToken, authorizeRoles('ADMIN'), (req, res) => {
     try {
         if (!fs.existsSync(uploadDir)) {
             return res.json({ success: true, data: [] });
@@ -162,7 +236,7 @@ router.get('/files', (req, res) => {
     }
 });
 
-// GET - Lay hinh anh san pham theo productId
+// GET - Lay hinh anh san pham theo productId (PUBLIC - trace.html dung)
 router.get('/product/:productId/image', async (req, res) => {
     try {
         const files = await db.getFilesByProduct(req.params.productId);
@@ -184,7 +258,7 @@ router.get('/product/:productId/image', async (req, res) => {
     }
 });
 
-// GET - Lay chung nhan san pham theo productId
+// GET - Lay chung nhan san pham theo productId (PUBLIC - trace.html dung)
 router.get('/product/:productId/certificate', async (req, res) => {
     try {
         const files = await db.getFilesByProduct(req.params.productId);
@@ -206,8 +280,8 @@ router.get('/product/:productId/certificate', async (req, res) => {
     }
 });
 
-// GET - Lay metadata cac file cua san pham
-router.get('/product/:productId/files', async (req, res) => {
+// GET - Lay metadata cac file cua san pham (CAN DANG NHAP - bao gom hash, kich thuoc, uploadedBy)
+router.get('/product/:productId/files', authenticateToken, async (req, res) => {
     try {
         const files = await db.getFilesByProduct(req.params.productId);
         

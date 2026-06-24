@@ -31,15 +31,85 @@ async function findUserById(id) {
 }
 
 async function createUser(userData) {
-    var sql = 'INSERT INTO users (id, password_hash, name, role, organization, location, phone, email) VALUES (?, ?, ?, ?, ?, ?, ?, ?)';
+    var sql = 'INSERT INTO users (id, password_hash, name, role, organization, location, phone, email, must_change_password) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)';
     await pool.execute(sql, [
         userData.id, userData.passwordHash, userData.name, userData.role,
-        userData.organization, userData.location || '', userData.phone || '', userData.email || ''
+        userData.organization, userData.location || '', userData.phone || '', userData.email || '',
+        userData.mustChangePassword ? 1 : 0
     ]);
 }
 
 async function updateUserPassword(id, passwordHash) {
-    await pool.execute('UPDATE users SET password_hash = ? WHERE id = ?', [passwordHash, id]);
+    await pool.execute('UPDATE users SET password_hash = ?, must_change_password = FALSE WHERE id = ?', [passwordHash, id]);
+}
+
+async function getAllUsers() {
+    var [rows] = await pool.execute('SELECT id, name, role, organization, location, phone, email, is_active FROM users ORDER BY created_at DESC');
+    return rows;
+}
+
+async function softDeleteUser(id) {
+    await pool.execute('UPDATE users SET is_active = FALSE WHERE id = ?', [id]);
+}
+
+// ==================== REGISTRATION REQUESTS ====================
+
+async function createRegistrationRequest(data) {
+    var sql = `INSERT INTO registration_requests 
+        (id, name, password_hash, role, organization, location, phone, email, otp_code, otp_expires_at, status) 
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OTP_PENDING')`;
+    await pool.execute(sql, [
+        data.id, data.name, data.passwordHash, data.role,
+        data.organization, data.location || '', data.phone || '', data.email,
+        data.otpCode, data.otpExpiresAt
+    ]);
+}
+
+async function findRegistrationById(id) {
+    var [rows] = await pool.execute('SELECT * FROM registration_requests WHERE id = ? ORDER BY created_at DESC LIMIT 1', [id]);
+    return rows[0] || null;
+}
+
+async function findRegistrationByEmail(email) {
+    var [rows] = await pool.execute('SELECT * FROM registration_requests WHERE email = ? ORDER BY created_at DESC LIMIT 1', [email]);
+    return rows[0] || null;
+}
+
+async function updateRegistrationOTP(id, otpCode, otpExpiresAt) {
+    await pool.execute(
+        'UPDATE registration_requests SET otp_code = ?, otp_expires_at = ?, status = ? WHERE id = ? AND status IN (?, ?)',
+        [otpCode, otpExpiresAt, 'OTP_PENDING', id, 'OTP_PENDING', 'PENDING']
+    );
+}
+
+async function verifyRegistrationOTP(id, otpCode) {
+    var [rows] = await pool.execute(
+        'SELECT * FROM registration_requests WHERE id = ? AND otp_code = ? AND otp_expires_at > NOW() AND status = ?',
+        [id, otpCode, 'OTP_PENDING']
+    );
+    if (rows.length > 0) {
+        await pool.execute('UPDATE registration_requests SET status = ? WHERE id = ? AND status = ?', ['PENDING', id, 'OTP_PENDING']);
+        return true;
+    }
+    return false;
+}
+
+async function getPendingRegistrations() {
+    var [rows] = await pool.execute('SELECT * FROM registration_requests WHERE status = ? ORDER BY created_at DESC', ['PENDING']);
+    return rows;
+}
+
+async function approveRegistration(id) {
+    await pool.execute('UPDATE registration_requests SET status = ?, reviewed_at = NOW() WHERE id = ?', ['APPROVED', id]);
+}
+
+async function rejectRegistration(id, reason) {
+    await pool.execute('UPDATE registration_requests SET status = ?, reject_reason = ?, reviewed_at = NOW() WHERE id = ?', ['REJECTED', reason || '', id]);
+}
+
+async function getRegistrationsByStatus(status) {
+    var [rows] = await pool.execute('SELECT * FROM registration_requests WHERE status = ? ORDER BY created_at DESC', [status]);
+    return rows;
 }
 
 // ==================== PRODUCT CACHE ====================
@@ -66,7 +136,6 @@ async function cacheProduct(product) {
 async function getCachedProducts(filters) {
     var sql = 'SELECT * FROM products_cache WHERE 1=1';
     var params = [];
-
     if (filters && filters.status) {
         sql += ' AND current_status = ?';
         params.push(filters.status);
@@ -84,16 +153,13 @@ async function getCachedProducts(filters) {
         var s = '%' + filters.search + '%';
         params.push(s, s, s);
     }
-
     sql += ' ORDER BY updated_at DESC';
-
     if (filters && filters.limit) {
         sql += ' LIMIT ' + parseInt(filters.limit);
     }
     if (filters && filters.offset) {
         sql += ' OFFSET ' + parseInt(filters.offset);
     }
-
     var [rows] = await pool.execute(sql, params);
     return rows;
 }
@@ -117,7 +183,6 @@ async function logActivity(data) {
 async function getActivityLogs(filters) {
     var sql = 'SELECT * FROM activity_logs WHERE 1=1';
     var params = [];
-
     if (filters && filters.userId) {
         sql += ' AND user_id = ?';
         params.push(filters.userId);
@@ -126,7 +191,6 @@ async function getActivityLogs(filters) {
         sql += ' AND action = ?';
         params.push(filters.action);
     }
-
     sql += ' ORDER BY created_at DESC LIMIT 100';
     var [rows] = await pool.execute(sql, params);
     return rows;
@@ -173,6 +237,47 @@ async function markNotificationRead(id, userId) {
 async function markAllNotificationsRead(userId) {
     await pool.execute('UPDATE notifications SET is_read = TRUE WHERE user_id = ?', [userId]);
 }
+async function createRetailPayment(data) {
+    var sql = `INSERT INTO retail_payments
+        (order_id, product_id, retailer_id, quantity, unit_price, amount, status, vnp_txn_ref)
+        VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?)`;
+
+    await pool.execute(sql, [
+        data.orderId,
+        data.productId,
+        data.retailerId,
+        data.quantity,
+        data.unitPrice,
+        data.amount,
+        data.orderId
+    ]);
+}
+
+async function findRetailPaymentByOrderId(orderId) {
+    var [rows] = await pool.execute(
+        'SELECT * FROM retail_payments WHERE order_id = ? LIMIT 1',
+        [orderId]
+    );
+    return rows[0] || null;
+}
+
+async function markRetailPaymentPaid(orderId, vnpTransactionNo, responseCode) {
+    await pool.execute(
+        `UPDATE retail_payments
+         SET status = 'PAID', vnp_transaction_no = ?, vnp_response_code = ?, paid_at = NOW()
+         WHERE order_id = ? AND status = 'PENDING'`,
+        [vnpTransactionNo || '', responseCode || '', orderId]
+    );
+}
+
+async function markRetailPaymentFailed(orderId, responseCode) {
+    await pool.execute(
+        `UPDATE retail_payments
+         SET status = 'FAILED', vnp_response_code = ?
+         WHERE order_id = ? AND status = 'PENDING'`,
+        [responseCode || '', orderId]
+    );
+}
 
 module.exports = {
     pool,
@@ -180,6 +285,17 @@ module.exports = {
     findUserById,
     createUser,
     updateUserPassword,
+    getAllUsers,
+    softDeleteUser,
+    createRegistrationRequest,
+    findRegistrationById,
+    findRegistrationByEmail,
+    updateRegistrationOTP,
+    verifyRegistrationOTP,
+    getPendingRegistrations,
+    approveRegistration,
+    rejectRegistration,
+    getRegistrationsByStatus,
     cacheProduct,
     getCachedProducts,
     getCachedProductById,
@@ -190,5 +306,9 @@ module.exports = {
     createNotification,
     getNotifications,
     markNotificationRead,
-    markAllNotificationsRead
+    markAllNotificationsRead,
+    createRetailPayment,
+findRetailPaymentByOrderId,
+markRetailPaymentPaid,
+markRetailPaymentFailed,
 };
